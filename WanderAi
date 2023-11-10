@@ -1,0 +1,79 @@
+using UdonSharp;
+using UnityEngine;
+using UnityEngine.AI;
+using VRC.SDKBase;
+using VRC.Udon;
+
+public class WanderAi : UdonSharpBehaviour
+{
+    public float wanderRadius;
+    public float wanderTimer;
+
+    private Transform target;
+    private NavMeshAgent agent;
+    private Animator anim;
+    private float timer;
+
+    private Vector3 syncedPosition;
+    private Quaternion syncedRotation;
+
+    private void Start()
+    {
+        agent = GetComponent<NavMeshAgent>();
+        anim = GetComponentInChildren<Animator>();
+        timer = wanderTimer;
+
+        if (Networking.IsOwner(gameObject))
+        {
+            syncedPosition = transform.position;
+            syncedRotation = transform.rotation;
+        }
+    }
+
+    void Update()
+    {
+        timer += Time.deltaTime;
+        if (agent.velocity != Vector3.zero)
+        {
+            anim.SetBool("Move", true);
+        }
+        else
+        {
+            anim.SetBool("Move", false);
+        }
+
+        if (timer >= wanderTimer)
+        {
+            Vector3 newPos = RandomNavSphere(transform.position, wanderRadius, -1);
+            agent.SetDestination(newPos);
+            timer = 0;
+
+            if (Networking.IsOwner(gameObject))
+            {
+                // Update the synced position and rotation
+                syncedPosition = transform.position;
+                syncedRotation = transform.rotation;
+                // Broadcast the changes to other players
+                RequestSerialization();
+            }
+        }
+
+        // Synchronize position and rotation for non-owners
+        if (!Networking.IsOwner(gameObject))
+        {
+            transform.position = syncedPosition;
+            transform.rotation = syncedRotation;
+        }
+    }
+
+    public Vector3 RandomNavSphere(Vector3 origin, float dist, int layermask)
+    {
+        Vector3 randDirection = Random.insideUnitSphere * dist;
+        randDirection += origin;
+
+        NavMeshHit navHit;
+        NavMesh.SamplePosition(randDirection, out navHit, dist, layermask);
+
+        return navHit.position;
+    }
+}
