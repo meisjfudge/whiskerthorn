@@ -1,0 +1,13 @@
+using UdonSharp;
+using UnityEngine;
+using VRC.Udon;
+
+public class ResetNPCButton : UdonSharpBehaviour
+{
+    public AdvancedNPC npcScript; // Reference to your AdvancedNPC script.
+
+    public override void Interact() // This function is called when players press the button in the VR world.
+    {
+        npcScript.ResetNPC(); // Call the method to reset the NPC.
+    }
+}
