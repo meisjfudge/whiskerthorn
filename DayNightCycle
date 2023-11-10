@@ -1,0 +1,66 @@
+using UdonSharp;
+using UnityEngine;
+using VRC.SDKBase;
+using VRC.Udon;
+
+public class DayNightCycle : UdonSharpBehaviour
+{
+    [Header("Lighting Settings")]
+    public Light directionalLight;
+    public float dayIntensity = 1f;
+    public float nightIntensity = 0f;
+
+    [Header("Toggle Objects")]
+    public GameObject[] toggleObjects;
+
+    [Header("Timing Settings")]
+    public float dayDuration = 60f;  // Duration of daylight in seconds
+    public float nightDuration = 100f;  // Duration of night in seconds
+
+    private float timeCounter = 0f;
+    private bool isDay = true;
+
+    private void Start()
+    {
+        SetDaylight(true);
+    }
+
+    private void Update()
+    {
+        timeCounter += Time.deltaTime;
+        RotateLight(timeCounter / (isDay ? dayDuration : nightDuration) * 180f);
+
+        if (isDay && timeCounter >= dayDuration)
+        {
+            SetDaylight(false);
+        }
+        else if (!isDay && timeCounter >= nightDuration)
+        {
+            SetDaylight(true);
+        }
+    }
+
+    private void RotateLight(float rotationAngle)
+    {
+        directionalLight.transform.rotation = Quaternion.Euler(rotationAngle, -30f, 0f);
+    }
+
+    private void SetDaylight(bool isDaytime)
+    {
+        isDay = isDaytime;
+        directionalLight.intensity = isDaytime ? dayIntensity : nightIntensity;
+        timeCounter = 0;
+
+        // Toggle objects according to the new daylight status
+        ToggleObjects();
+    }
+
+    private void ToggleObjects()
+    {
+        foreach (GameObject obj in toggleObjects)
+        {
+            // Flip the current active state of each object
+            obj.SetActive(!obj.activeSelf);
+        }
+    }
+}
