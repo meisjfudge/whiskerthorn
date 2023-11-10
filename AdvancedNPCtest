@@ -1,0 +1,394 @@
+using UdonSharp;
+using UnityEngine;
+using UnityEngine.AI;
+using UnityEngine.UI;
+using VRC.SDKBase;
+using VRC.Udon;
+using VRC.Udon.Common.Interfaces;
+
+public class AdvancedNPC : UdonSharpBehaviour
+{
+    [Header("Player's Weapons Reference")]
+    public GameObject[] playerWeapons;
+
+    [Header("Health Properties")]
+    public Slider healthBar;
+    public Animator npcAnimator;
+    public float maxHealth = 100f;
+    private float currentHealth;
+
+    [Header("Respawn Properties")]
+    public float respawnTime = 180f;
+    private Vector3 initialPosition;
+    private Quaternion initialRotation;
+    private bool isRespawning = false;
+    private float respawnTimer;
+
+    [Header("Wandering Properties")]
+    public float wanderRadius;
+    public float wanderTimer;
+    private float timer;
+
+    [Header("Combat Properties")]
+    public float damagePerSecond = 10f;
+    private bool isEngaged = false;
+    private float disengageTime = 10f;
+    private float disengageTimer;
+
+    [Header("Death Properties")]
+    public GameObject deathDrop;
+    private bool isDead = false;
+    private bool startDisappearTimer = false;
+    private float disappearTimer = 0f;
+    private float timeToDisappear = 3f;
+
+    [Header("Attack Properties")]
+    public float attackInterval = 3f;
+    private float attackTimer;
+
+
+    private NavMeshAgent agent;
+    private UdonBehaviour udonBehaviour;
+
+    [UdonSynced] public float syncedHealth;
+    [UdonSynced] public Vector3 syncedPosition;
+    [UdonSynced] public Quaternion syncedRotation;
+    [UdonSynced] public bool isDeadSynced;
+
+
+    private bool isMaster;
+
+    void Start()
+    {
+        udonBehaviour = (UdonBehaviour)GetComponent(typeof(UdonBehaviour));
+        isMaster = Networking.IsMaster;
+
+        disengageTimer = disengageTime;
+
+        agent = GetComponent<NavMeshAgent>();
+        npcAnimator = GetComponentInChildren<Animator>();
+
+        timer = wanderTimer;
+        attackTimer = attackInterval;
+        RandomWander();
+
+        initialPosition = transform.position;
+        initialRotation = transform.rotation;
+
+        // Initialize the UdonSynced fields
+        syncedHealth = currentHealth = maxHealth;
+        syncedPosition = transform.position;
+        syncedRotation = transform.rotation;
+        isDeadSynced = isDead;
+
+        healthBar.value = currentHealth;
+    }
+
+    void Update()
+    {
+
+        if (isDead || isDeadSynced) return;
+
+        if (Networking.IsOwner(gameObject))
+        {
+            syncedPosition = transform.position;
+            syncedRotation = transform.rotation;
+            isDeadSynced = isDead;
+            udonBehaviour.RequestSerialization();
+        }
+        else
+        {
+            // ((todo advice from gpt - It's usually better to handle position synchronization in OnDeserialization to reduce network traffic and use interpolation there if needed))
+            transform.position = Vector3.Lerp(transform.position, syncedPosition, Time.deltaTime * 15f);
+            transform.rotation = Quaternion.Lerp(transform.rotation, syncedRotation, Time.deltaTime * 15f);
+            isDead = isDeadSynced;
+        }
+
+        timer += Time.deltaTime;
+        attackTimer += Time.deltaTime;
+
+        npcAnimator.SetBool("Move", agent.velocity != Vector3.zero);
+
+        if (timer >= wanderTimer && !isEngaged)
+        {
+            Vector3 newPos = RandomNavSphere(transform.position, wanderRadius, -1);
+            agent.SetDestination(newPos);
+            timer = 0;
+        }
+
+        if (isEngaged)
+        {
+            disengageTimer -= Time.deltaTime;
+            if (disengageTimer <= 0)
+            {
+                Disengage();
+            }
+        }
+
+        if (isMaster && !isDead)
+        {
+            syncedHealth = currentHealth;
+            udonBehaviour.RequestSerialization();
+        }
+        else
+        {
+            currentHealth = syncedHealth;
+        }
+
+        if (isEngaged && attackTimer >= attackInterval)
+        {
+            Attack();
+            attackTimer = 0f;
+        }
+
+        if (startDisappearTimer && isMaster)
+        {
+            disappearTimer += Time.deltaTime;
+            if (disappearTimer >= timeToDisappear)
+            {
+                if (deathDrop != null)
+                {
+                    Networking.Instantiate(deathDrop, transform.position, transform.rotation);
+                }
+                startDisappearTimer = false;
+                udonBehaviour.SendCustomNetworkEvent(NetworkEventTarget.All, nameof(DestroyNPC));
+            }
+        }
+
+        if (isRespawning)
+        {
+            TryRespawn();
+        }
+    }
+
+    // You may define methods to handle changes in the synced fields if necessary
+    // For example, if you need to perform an action when syncedHealth changes, you would define a method like this:
+    public void OnSyncedHealthChanged()
+    {
+        // Perform necessary actions when syncedHealth changes
+        currentHealth = syncedHealth;
+        // todo Update health bar or other UI elements if necessary
+    }
+
+    private void TryRespawn()
+    {
+        if (isRespawning && Networking.IsOwner(gameObject))
+        {
+            respawnTimer -= Time.deltaTime;
+            if (respawnTimer <= 0)
+            {
+                RespawnNPC();
+                isRespawning = false; // Reset the flag after respawning
+            }
+        }
+    }
+
+    // public void OnNetworkReady()
+    // {
+    //     if (Networking.IsMaster)
+    //     {
+    //         // Initialize currentHealth as well
+    //         currentHealth = maxHealth;
+    //         healthBar.value = currentHealth;
+
+    //         syncedHealth = maxHealth;
+    //         syncedPosition = transform.position;
+    //         syncedRotation = transform.rotation;
+    //         isDeadSynced = isDead;
+
+    //         udonBehaviour.RequestSerialization();
+    //     }
+    // }
+
+    // public override void OnMasterClientSwitched()
+    // {
+    //     isMaster = Networking.IsMaster;
+    // }
+
+    // This UdonSharp method is automatically called when the local player becomes the owner of the object.
+    public override void OnOwnershipTransferred()
+    {
+        isMaster = Networking.IsMaster;
+    }
+
+    void OnTriggerEnter(Collider other)
+    {
+        if (Networking.IsOwner(gameObject))
+        {
+            foreach (GameObject weapon in playerWeapons) // todo from gpt - can be performance improved
+            {
+                if (other.gameObject == weapon)
+                {
+                    TakeDamage(damagePerSecond);
+                    string damageTrigger = Random.Range(0, 2) == 0 ? "TookDamageA" : "TookDamageB";
+                    npcAnimator.SetTrigger(damageTrigger);
+
+                    if (!isEngaged)
+                    {
+                        Engage();
+                    }
+                    else
+                    {
+                        disengageTimer = disengageTime; // Reset the timer if re-engaged in combat
+                    }
+                }
+            }
+        }
+    }
+
+
+    private Vector3 RandomNavSphere(Vector3 origin, float dist, int layermask)
+    {
+        Vector3 randDirection = Random.insideUnitSphere * dist;
+        randDirection += origin;
+
+        NavMeshHit navHit;
+        NavMesh.SamplePosition(randDirection, out navHit, dist, layermask);
+
+        return navHit.position;
+    }
+
+    private void RandomWander()
+    {
+        Vector3 newPos = RandomNavSphere(transform.position, wanderRadius, -1);
+        agent.SetDestination(newPos);
+    }
+
+    private void TakeDamage(float damageAmount)
+    {
+        if (!isDead && Networking.IsOwner(gameObject))
+        {
+            currentHealth -= damageAmount;
+            healthBar.value = currentHealth;
+            syncedHealth = currentHealth;
+            udonBehaviour.RequestSerialization();
+
+            if (currentHealth <= 0)
+            {
+                Die();
+            }
+        }
+    }
+
+    private void Engage()
+    {
+        isEngaged = true;
+        agent.isStopped = true;
+        disengageTimer = disengageTime;
+    }
+
+    private void Disengage()
+    {
+        isEngaged = false;
+        agent.isStopped = false;
+        RandomWander();
+    }
+
+    private void Attack()
+    {
+        // Randomly choose between the two attack animations
+        string attackTrigger = Random.Range(0, 2) == 0 ? "AttackA" : "AttackB";
+        npcAnimator.SetTrigger(attackTrigger);
+    }
+
+    public void RespawnNPC()
+    {
+        if (isRespawning && Networking.IsOwner(gameObject))
+        {
+            udonBehaviour.SendCustomNetworkEvent(NetworkEventTarget.All, nameof(ResetNPC));
+        }
+    }
+
+    public void ResetNPC()
+    {
+        currentHealth = maxHealth;
+        healthBar.value = currentHealth;
+
+        transform.position = initialPosition;
+        transform.rotation = initialRotation;
+
+        npcAnimator.Rebind();
+
+        agent.ResetPath();
+        isDead = false;
+        isRespawning = false;
+        isEngaged = false;
+        RandomWander();
+
+        syncedHealth = maxHealth; //if isowner?
+        udonBehaviour.RequestSerialization();
+    }
+
+    private void Die()
+    {
+        if (!isDead && Networking.IsOwner(gameObject))
+        {
+            isDead = true;
+            syncedHealth = 0; // Ensure health is 0 on death.
+            udonBehaviour.RequestSerialization();
+
+            TriggerDeathAnimation();
+
+            npcAnimator.SetTrigger("DieA");
+
+            agent.isStopped = true;
+
+            startDisappearTimer = true;
+            disappearTimer = 0f; // Reset the disappear timer
+
+            if (Networking.IsMaster)
+            {
+                if (deathDrop != null)
+                {
+                    Networking.Instantiate(VRC_EventHandler.VrcBroadcastType.Always, "deathDrop", transform.position, transform.rotation);
+                }
+            }
+
+            isRespawning = true;
+            respawnTimer = respawnTime;
+
+            udonBehaviour.SendCustomNetworkEvent(NetworkEventTarget.All, nameof(TriggerDeathAnimation));
+        }
+    }
+
+    private void TriggerDeathAnimation()
+    {
+        npcAnimator.SetTrigger("DieA");
+        agent.isStopped = true;
+    }
+
+    private void DestroyNPC()
+    {
+        if (Networking.IsOwner(gameObject))
+        {
+            Networking.Destroy(gameObject);
+        }
+    }
+
+    // This is called after the variable synced through the network is updated.
+    public override void OnDeserialization()
+    {
+        if (!Networking.IsOwner(gameObject))
+        {
+
+            // Since the fields are updated, call the change handlers if needed
+            OnSyncedHealthChanged();
+
+            currentHealth = syncedHealth;
+            healthBar.value = currentHealth;
+
+            transform.position = syncedPosition;
+            transform.rotation = syncedRotation;
+
+            if (isDeadSynced != isDead)
+            {
+                isDead = isDeadSynced;
+                if (isDead)
+                {
+                    TriggerDeathAnimation();
+                }
+            }
+        }
+    }
+
+}
