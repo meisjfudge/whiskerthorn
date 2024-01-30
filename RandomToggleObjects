@@ -1,0 +1,53 @@
+using UdonSharp;
+using UnityEngine;
+using VRC.SDKBase;
+using VRC.Udon;
+
+public class RandomToggleObjects : UdonSharpBehaviour
+{
+    public GameObject[] objectsToToggle; // Array of GameObjects to toggle
+    public float minToggleInterval = 1f; // Minimum time between toggles
+    public float maxToggleInterval = 5f; // Maximum time between toggles
+    public float minTimeOn = 0.5f; // Minimum time an object stays active
+    public float maxTimeOn = 2f; // Maximum time an object stays active
+
+    private float nextToggleTime;
+    private float nextToggleEndTime;
+
+    private void Start()
+    {
+        // Initialize the first toggle time
+        nextToggleTime = Time.time + Random.Range(minToggleInterval, maxToggleInterval);
+        // Initialize the next toggle end time
+        nextToggleEndTime = Time.time + Random.Range(minTimeOn, maxTimeOn);
+    }
+
+    private void Update()
+    {
+        // Check if it's time to toggle objects
+        if (Time.time >= nextToggleTime)
+        {
+            ToggleObjects(); // Toggle the objects
+            nextToggleTime = Time.time + Random.Range(minToggleInterval, maxToggleInterval); // Set the next toggle time
+            // Set the next toggle end time after toggling objects
+            nextToggleEndTime = Time.time + Random.Range(minTimeOn, maxTimeOn);
+        }
+
+        // Check if it's time to turn off objects
+        if (Time.time >= nextToggleEndTime)
+        {
+            ToggleObjects(); // Toggle the objects
+            // Set the next toggle end time after turning off objects
+            nextToggleEndTime = Time.time + Random.Range(minTimeOn, maxTimeOn);
+        }
+    }
+
+    private void ToggleObjects()
+    {
+        // Iterate through the objects and toggle their active state randomly
+        foreach (GameObject obj in objectsToToggle)
+        {
+            obj.SetActive(!obj.activeSelf);
+        }
+    }
+}
